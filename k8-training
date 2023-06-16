@@ -1,0 +1,217 @@
+# kubectl: Kubernetes command-line tool, kubectl, allows you to run commands against Kubernetes clusters. 
+# You can use kubectl to deploy applications, inspect and manage cluster resources, and view logs.
+
+# kubelet:The kubelet is the primary "node agent" that runs on each node. It can register the node with the apiserver using one of: the hostname; a flag to override 
+# the hostname; or specific logic for a cloud provider.
+
+# kubeadm: Kubeadm is a tool built to provide kubeadm init and kubeadm join as best-practice "fast paths" for creating Kubernetes clusters.
+# kubeadm performs the actions necessary to get a minimum viable cluster up and running. By design, it cares only about bootstrapping, 
+# not about provisioning machines. 
+
+
+################################################################ K8 DEMO ##############################################################
+
+############ STEP 1 ############
+
+# create ec2 and security groups for k8
+# open ports for 0.0.0.0/0
+22
+6443
+2379-2380
+10250-10252
+30000-32767
+
+
+############ STEP 2 ############
+
+# redhat login = ogie.eweka | Devopsiscool-21
+# https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/9/html/managing_software_with_the_dnf_tool/assembly_updating-RHEL-9-content_managing-software-with-the-dnf-tool
+
+# RHEL ec2 setup
+sudo -i 
+dnf upgrade -y
+
+subscription-manager register # when prompted, enter username = ogie.eweka and password = Devopsiscool-21
+
+
+# using vagrant, run the below code 
+# hostnamectl set-hostname <COMPUTER NAME >    # k8-worker-node-cdk k8-cluster-cdk
+# echo 'preserve_hostname: true' >> /etc/cloud/cloud.cfg
+
+############ STEP 3 ############
+
+# Setup RHEL ec2 for k8 configuration
+# https://www.linuxtechi.com/how-to-install-kubernetes-cluster-RHEL/
+
+# set hostname to aws Private IP DNS name
+sudo hostnamectl set-hostname $(curl http://169.254.169.254/latest/meta-data/hostname)
+
+hostname
+
+# disable swap
+sudo swapoff -a
+
+# disable firewalld
+sudo yum install firewalld
+
+# disbale selinux
+sudo sed -i 's/^SELINUX=enforcing$/SELINUX=permissive/' /etc/selinux/config
+
+# OR 
+sudo vi /etc/selinux/config
+
+# Change the SELINUX value from enforcing to permissive.
+SELINUX=permissive
+
+# In this guide, we will install CRI-O which is a high-level container runtime. 
+# To do so, we need to enable two crucial kernel modules – overlay and br_netfilter modules.
+# First, create a modules configuration file for Kubernetes.
+sudo vi /etc/modules-load.d/k8s.conf
+
+# Add these lines and save the changes
+overlay
+br_netfilter
+
+# Then load both modules using the modprobe command.
+sudo modprobe overlay
+sudo modprobe br_netfilter
+
+# Next, configure the required sysctl parameters as follows
+sudo vi /etc/sysctl.d/k8s.conf
+
+# Add the following lines:
+net.bridge.bridge-nf-call-iptables  = 1
+net.ipv4.ip_forward                 = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+
+# Save the changes and exit. To confirm the changes have been applied, run the command:
+sudo sysctl --system
+
+############ STEP 4 ############
+
+# install crio
+# https://mistonline.in/wp/how-to-install-kubernetes-cluster-on-RHEL-9/
+
+export VERSION=1.25
+export OS=CentOS_8
+curl -L -o /etc/yum.repos.d/devel:kubic:libcontainers:stable.repo https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/$OS/devel:kubic:libcontainers:stable.repo
+curl -L -o /etc/yum.repos.d/devel:kubic:libcontainers:stable:cri-o:$VERSION.repo https://download.opensuse.org/repositories/devel:kubic:libcontainers:stable:cri-o:$VERSION/$OS/devel:kubic:libcontainers:stable:cri-o:$VERSION.repo
+yum install crio -y
+systemctl status crio
+systemctl start crio
+systemctl enable crio
+
+############ STEP 5 ############
+
+# install kubernetes
+cat <<EOF > /etc/yum.repos.d/kubernetes.repo
+[kubernetes]
+name=Kubernetes
+baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+EOF
+
+# Install Kubernetes (kubeadm, kubelet and kubectl)
+dnf --showduplicates list  kubeadm -y
+dnf install -y kubeadm-1.25.7-0 kubelet-1.25.7-0 kubectl-1.25.7-0
+systemctl enable kubelet.service
+
+############ STEP 6 ############
+
+# Create control plane node
+kubeadm config images pull
+
+kubeadm init 
+
+# OUTPUT OF kubeadm on k8-cluster-cdk 
+Your Kubernetes control-plane has initialized successfully!
+
+To start using your cluster, you need to run the following as a regular user:
+
+  mkdir -p $HOME/.kube
+  sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+  sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+Alternatively, if you are the root user, you can run:
+
+  export KUBECONFIG=/etc/kubernetes/admin.conf
+
+You should now deploy a pod network to the cluster.
+Run "kubectl apply -f [podnetwork].yaml" with one of the options listed at:
+  https://kubernetes.io/docs/concepts/cluster-administration/addons/
+
+Then you can join any number of worker nodes by running the following on each as root:
+
+kubeadm join 10.0.4.47:6443 --token emzf43.11gwv55je9noijcp \
+	--discovery-token-ca-cert-hash sha256:74f53aff763ff53c0bf1d3cb527009b359a26bec15ced8bb042a36271f030a29 
+
+# run commands per kubeadm init output as root 
+export KUBECONFIG=/etc/kubernetes/admin.conf
+echo "export KUBECONFIG=/etc/kubernetes/admin.conf" >> ~/.bash_profile
+source ~/.bash_profile
+
+# Install Calico Pod Network Add-on (CNI)
+kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/calico.yaml
+
+############ STEP 7 ############
+# Node is a worker machine in Kubernetes and may be either a virtual or a physical machine, depending on the cluster.
+
+# Pod is the most basic deployable unit within a Kubernetes cluster. A Pod runs one or more containers. 
+# Zero or more Pods run on a node. Each node in the cluster is part of a node pool. 
+
+# commands to inspect node and pods 
+
+# get status of node 
+kubectl describe node
+
+# verify master node availability
+kubectl get nodes
+
+# In addition, you can retrieve more information using the -o wide options.
+kubectl get nodes -o wide
+
+# check status of pods 
+kubectl get pods -A
+
+# To confirm if the pods have started, run the command:
+kubectl get pods -n kube-system
+
+# check the pod namespaces
+kubectl get pods --all-namespaces
+
+############ STEP 8 ############
+
+# on worker node run step 1 - 5
+#join worker to master using command output from creating cluster on master
+
+
+# add worker role to the node
+kubectl get nodes # to get name of worker node
+
+kubectl label node ip-10-0-4-115.ec2.internal node-role.kubernetes.io/worker=worker # label worker node
+
+kubectl describe node ip-10-0-4-115.ec2.internal # inspect worker node 
+
+# can add another worker node by deploying another ec2 and following same instrcutions for worker node
+
+############ STEP 9 ############
+# deploy dashboard https://github.com/kubernetes/dashboard on master node
+
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v2.7.0/aio/deploy/recommended.yaml
+
+# check status of service
+kubectl get svc -n kubernetes-dashboard
+
+kubectl describe service kubernetes-dashboard -n kubernetes-dashboard
+
+# change type of service to node port to access dashboard from external service
+kubectl edit service kubernetes-dashboard -n kubernetes-dashboard
+
+# check node on which the pod is running for k8 das
+kubectl get pods -n kubernetes-dashboard -o wide
+
+
+
