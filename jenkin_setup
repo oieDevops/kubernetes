@@ -1,0 +1,228 @@
+# Steps:
+# Install git
+# Install docker
+# install docker compose 
+# Download docker image for jenkins
+# create docker container for jenkins master
+# create Dockerfile to build image for remote server (slave node)
+# update docker compose file with remote server definition
+
+# STEP 1: install git 
+sudo yum update && sudo yum install git -y
+git version
+
+# STEP 2: Install docker https://www.cyberciti.biz/faq/how-to-install-docker-on-amazon-linux-2/
+## Install docker, check docker verion, add group membership for default user (ec2-user) and validate
+sudo yum update && sudo yum install docker -y && docker --version && sudo usermod -a -G docker ec2-user && id ec2-user
+sudo systemctl enable docker.service
+sudo systemctl start docker.service
+sudo systemctl status docker.service
+
+# STEP 3: Install docker compose
+sudo yum install python3-pip
+pip3 install --user docker-compose 
+echo 'PATH="$PATH:$HOME/.local/bin"' >> ~/.bashrc
+docker-compose --version
+
+# STEP 4: Download docker image for jenkins
+docker pull jenkins/jenkins
+docker images # check for docker images downloaded
+docker info | grep -i root # where docker is saving the images
+
+# STEP 5: docker compose file for jenkins
+mkdir jenkins-data && cd $_ && mkdir jenkins_home
+vi docker-compose.yml
+#### content of docker compose file ####
+version: '3'
+services:
+  jenkins:
+    container_name: jenkins
+    image: jenkins/jenkins
+    ports:
+      - "8080:8080"
+    volumes: 
+      - $PWD/jenkins_home:/var/jenkins_home
+    networks:
+      - net  
+networks:
+  net:
+########################################
+
+# STEP 6: create docker container for jenkins
+docker-compose up -d # spin up container
+docker ps # list container
+docker logs -f jenkins # show log to get the password for installation. command format docker logs -f <container name>
+<ip address>:8080 # access jenkins with ec2 public ip address & enter password from above step
+username = admin pwd = jk1234567oie # create admin user 
+
+# STEP 7: create jenkins slave Dockerfile
+mkdir centos7 && $_
+vi Dockerfile # create an image for slave node 
+#### content of Dockerfile ####
+FROM centos
+RUN cd /etc/yum.repos.d/
+
+RUN sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*
+
+RUN sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
+
+RUN yum -y install java
+
+RUN yum -y install openssh-server
+
+RUN useradd remote_user && \
+    echo "remote_user:1234" | chpasswd && \
+    mkdir /home/remote_user/.ssh && \
+    chmod 700 /home/remote_user/.ssh
+
+COPY remote-key.pub /home/remote_user/.ssh/authorized_keys
+
+RUN chown remote_user:remote_user -R /home/remote_user/.ssh/ && \
+    chmod 600 /home/remote_user/.ssh/authorized_keys
+
+RUN ssh-keygen -A
+
+EXPOSE 22
+
+RUN rm -rf /run/nologin
+
+CMD /usr/sbin/sshd -D
+########
+
+# STEP 8: update docker compose file 
+version: '3'
+services:
+  jenkins:
+    container_name: jenkins
+    image: jenkins/jenkins
+    ports:
+      - "8080:8080"
+    volumes: 
+      - $PWD/jenkins_home:/var/jenkins_home
+    networks:
+      - net
+  remote_host: # when creating Dockerfile
+    container_name: remote-host
+    image: remote-host
+    build:
+      context: centos7
+    networks:
+      - net
+  # slave1: # when downloading file from docker hub
+  #   container_name: slave1
+  #   image: jenkins/ssh-slave
+  #   networks:
+  #     - net    
+networks:
+  net:
+
+# STEP 9: build docker image from Dockerfile, create remote-host container and validate
+docker-compose build # build Dockerfile
+docker images # list docker images
+docker image rm -f <image id> # remove docker image
+docker-compose up -d # create remote-host container
+docker exec -it jenkins bash # ssh into jenkins container 
+ssh remote_user@remote_host # ssh to remote host
+ssh -i remote-key remote_user@remote_host # ssh to remote host without password
+
+# Install ssh plugin & configure ssh credentials
+Dashboard -> Manage Jenkins -> plugins
+Dashboard -> Manage Jenkins -> Credentials -> System -> Global credentials (unrestricted)
+Dashboard -> Manage Jenkins -> Configure -> ssh (fill in) -> save
+
+# run command on remote host
+NAME=Ogie
+echo "Hello, $NAME. Current date and time is $(date)" > /tmp/remote-file
+
+# MySQL AWS Shell scripting
+## create MySQL on docker
+version: '3'
+services:
+  jenkins:
+    container_name: jenkins
+    image: jenkins/jenkins
+    ports:
+      - "8080:8080"
+    volumes: 
+      - $PWD/jenkins_home:/var/jenkins_home
+    networks:
+      - net
+  remote_host: # when creating Dockerfile
+    container_name: remote-host
+    image: remote-host
+    build:
+      context: centos7
+    networks:
+      - net
+  db_host:
+    container_name: db
+    image: mysql:5.7
+    environment:
+      - "MYSQL_ROOT_PASSWORD=1234"
+    volume:
+      - "$PWD/db_data:/var/lib/mysql"
+    networks:
+      - net
+networks:
+  net:
+
+# install aws cli and mysql client on remote-host
+FROM centos
+RUN cd /etc/yum.repos.d/
+
+RUN sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*
+
+RUN sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
+
+RUN yum -y install java
+
+RUN yum install -y \
+        python3-pip \
+        python3 \
+        curl \
+        wget \
+        unzip \
+        socat \
+        openssl && \
+    yum clean all
+
+RUN yum -y install openssh-server
+
+RUN useradd remote_user && \
+    echo "remote_user:1234" | chpasswd && \
+    mkdir /home/remote_user/.ssh && \
+    chmod 700 /home/remote_user/.ssh
+
+COPY remote-key.pub /home/remote_user/.ssh/authorized_keys
+
+RUN chown remote_user:remote_user -R /home/remote_user/.ssh/ && \
+    chmod 600 /home/remote_user/.ssh/authorized_keys
+
+RUN ssh-keygen -A
+
+EXPOSE 22
+
+RUN rm -rf /run/nologin
+
+RUN yum -y install mysql
+
+RUN curl -O https://bootstrap.pypa.io/pip/3.6/get-pip.py && \
+    python3 get-pip.py && \
+    pip3 install awscli --upgrade
+
+CMD /usr/sbin/sshd -D
+
+#create mysql db
+mysql -u root -h db_host -p
+show databases;
+create database testdb;
+use testdb;
+create table info (name varchar(20), lastname varchar(20), age int(2));
+show tables;
+desc info;
+insert into info values ('ricardo', 'gonzalez', 21);
+select * from info;
+
+mysqldump -u root -h db_host -p testdb > /tmp/db.sql #take mysql backup
+
+
